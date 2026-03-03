@@ -1,0 +1,42 @@
+body { font-family: system-ui, Arial; background:#f6f7f9; margin:0; }
+.wrap { max-width: 1200px; margin: 24px auto; background:#fff; padding: 18px 20px; border-radius: 12px; }
+h1,h2,h3 { margin: 10px 0; }
+label { display:block; margin-top:10px; font-weight:600; }
+input, button, select { padding:10px; margin-top:6px; width:100%; box-sizing:border-box; }
+button, .btn { cursor:pointer; }
+.btn { display:inline-block; padding:10px 12px; background:#111; color:#fff; border-radius:10px; text-decoration:none; margin-right:8px; }
+table { width:100%; border-collapse: collapse; margin-top:10px; }
+th, td { border:1px solid #ddd; padding:10px; vertical-align: top; }
+th { background:#fafafa; text-align:left; }
+.error { color:#b00020; font-weight:700; }
+.note { color:#333; font-size: 0.95rem; }
+.card { border:1px solid #e7e7e7; border-radius:12px; padding:14px; margin-top:14px; background:#fff; }
+.hr { height:1px; background:#eee; margin:14px 0; }
+.grid2 { display:grid; grid-template-columns: 1fr 1fr; gap:14px; }
+.grid3 { display:grid; grid-template-columns: 1fr 1fr 1fr; gap:14px; }
+.grid4 { display:grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap:14px; align-items:end; }
+.grid5 { display:grid; grid-template-columns: 1fr 1fr 1fr 1fr 1fr; gap:14px; align-items:end; }
+@media (max-width: 900px) {
+  .grid2, .grid3, .grid4, .grid5 { grid-template-columns: 1fr; }
+}
+#calendar { min-height: 650px; }
+
+/* FullCalendar 글씨 잘림/가림 방지 */
+.fc-daygrid .fc-event-title, .fc-daygrid .fc-event-time { white-space: normal !important; }
+.fc-daygrid .fc-daygrid-event { overflow: visible !important; }
+.fc .fc-daygrid-day-frame { min-height: 120px; }
+.fc .fc-event { line-height: 1.2; }
+.tablewrap { overflow-x: auto; }
+td.names { max-width: 420px; white-space: normal; }
+
+/* 달력 가독성 */
+.fc .fc-event { font-size: 12px; padding: 2px 3px; }
+.fc .fc-toolbar-title { font-size: 18px; }
+
+/* timeGrid(week/day)에서는 이벤트가 많으면 렌더링이 무거워질 수 있어 한 줄로 고정 */
+.fc-timegrid .fc-event-title,
+.fc-timegrid .fc-event-time {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

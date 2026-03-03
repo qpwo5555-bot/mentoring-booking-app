@@ -1,0 +1,213 @@
+{% extends "base.html" %}
+{% block head %}
+<link href="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.15/index.global.min.css" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.15/index.global.min.js"></script>
+{% endblock %}
+
+{% block body %}
+<h1>차수 관리: {{ rnd.name }}</h1>
+<p><a href="/prof">교수 홈</a> | <a href="/logout">로그아웃</a></p>
+
+<div class="card">
+  <h2>슬롯 자동 생성</h2>
+  <p class="note">
+    - 요일 입력: 월0, 화1, 수2, 목3, 금4, 토5, 일6 (예: 월/수/금 → 0,2,4)<br>
+    - 생성 단위: 상담시간 {{ rnd.duration_min }}분 기준 자동 분할<br>
+    - 생성 후 아래 달력에 표시됨<br>
+    - 달력에서 슬롯 클릭 → OPEN/CLOSED 토글 가능
+  </p>
+  <form method="post" action="/prof/round/{{ rnd.id }}/generate_slots" class="grid5">
+    <div><label>시작일</label><input name="start_date" type="date" required></div>
+    <div><label>종료일</label><input name="end_date" type="date" required></div>
+    <div><label>요일(콤마)</label><input name="weekdays" value="0,2,4" required></div>
+    <div><label>시작시간</label><input name="start_time" type="time" value="13:00" required></div>
+    <div><label>종료시간</label><input name="end_time" type="time" value="17:00" required></div>
+    <div style="grid-column: 1 / -1;"><button type="submit">슬롯 생성</button></div>
+  </form>
+</div>
+
+<div class="card" style="border:1px solid #d33;">
+  <h2 style="color:#d33;">슬롯 전체 삭제</h2>
+  <p class="note">
+    - 이 차수의 <b>모든 슬롯</b>과 그에 연결된 <b>모든 예약</b>을 한 번에 삭제함<br>
+    - 되돌릴 수 없으므로, 잘못 생성했을 때만 사용 권장
+  </p>
+  <button type="button" onclick="deleteAllSlots()" style="background:#d33;">이 차수 슬롯 전체 삭제</button>
+</div>
+
+<div class="card">
+  <h2>월간 달력(슬롯/예약 현황)</h2>
+  <div id="calendar"></div>
+<div class="hr"></div>
+<h3>슬롯 목록(표)</h3>
+<p class="note">표에서 수정/삭제 가능. 달력 이벤트 클릭에서도 토글/시간수정/삭제 가능.</p>
+<div class="tablewrap"><table id="slotsTable">
+<tr><th>날짜</th><th>시간</th><th>OPEN</th><th>예약</th><th>예약자</th><th>수정</th><th>삭제</th></tr>
+</table></div>
+</div>
+
+
+<script>
+async function deleteAllSlots(){
+  if(!confirm('정말로 이 차수의 슬롯/예약을 전체 삭제하겠습니까?\n되돌릴 수 없음.')) return;
+  const resp = await fetch('/prof/round/{{ rnd.id }}/slots/delete_all', {method:'POST'});
+  if(!resp.ok){
+    alert('전체 삭제 실패. (HTTP '+resp.status+')');
+    return;
+  }
+  const data = await resp.json();
+  alert('삭제 완료: 슬롯 '+(data.deleted_slots ?? 0)+'개');
+  location.reload();
+}
+
+document.addEventListener('DOMContentLoaded', async () => {
+  const calendarEl = document.getElementById('calendar');
+
+  if(!window.FullCalendar){
+    alert('달력 라이브러리(FullCalendar) 로딩 실패. 인터넷 연결 또는 보안 프로그램(CDN 차단) 확인 필요함.');
+    return;
+  }
+
+  const calendar = new FullCalendar.Calendar(calendarEl, {
+    initialView: 'dayGridMonth',
+    /* month는 자동으로 줄바꿈되지만, week/day(timeGrid)는 높이가 필요해서 고정 높이 사용 */
+    height: 760,
+    expandRows: false,
+    dayMaxEventRows: 4,
+    headerToolbar: {
+      left: 'prev,next today',
+      center: 'title',
+      right: 'dayGridMonth,timeGridWeek,timeGridDay'
+    },
+    eventTimeFormat: { hour: '2-digit', minute: '2-digit', hour12: false },
+    events: '/api/prof/round/{{ rnd.id }}/events',
+    // month(dayGrid)에서는 줄바꿈 허용, week/day(timeGrid)에서는 한 줄로 제한(렌더링 안정화)
+    eventDidMount: function(info) {
+      const props = info.event.extendedProps || {};
+      const cap = Number(props.capacity || 0);
+      // backend provides `count`; older builds used `reserved_count`
+      const cnt = Number((props.count ?? props.reserved_count) || 0);
+
+      // 색상 규칙
+      // - 예약 0: 기본(파랑)
+      // - 부분 예약(0 < 예약 < 정원): 보라색
+      // - 예약 마감(예약 >= 정원): 진회색
+      const applyColor = (bg, fg) => {
+        // FullCalendar(timeGrid)에서 실제 배경은 내부 .fc-event-main에 적용되는 경우가 많음
+        info.el.style.backgroundColor = bg;
+        info.el.style.borderColor = bg;
+        info.el.style.color = fg;
+        const inners = info.el.querySelectorAll('.fc-event-main, .fc-event-main-frame, .fc-event-title, .fc-event-time');
+        inners.forEach(n => {
+          n.style.backgroundColor = bg;
+          n.style.color = fg;
+        });
+
+        // Month(dayGrid)에서 점(dot) 색상도 함께 변경
+        const dot = info.el.querySelector('.fc-daygrid-event-dot');
+        if (dot) dot.style.borderColor = bg;
+      };
+
+      if (cap > 0 && cnt >= cap) {
+        applyColor('#4a4a4a', '#fff');   // 진회색(마감)
+      } else if (cnt > 0) {
+        applyColor('#7b4ce6', '#fff');   // 보라색(부분)
+      }
+    },
+    eventClick: async function(info){
+      const slotId = info.event.extendedProps.slotId;
+      // 달력 클릭 시 빠른 메뉴
+      const action = prompt("슬롯 작업: t=OPEN/CLOSED, e=시간수정, d=삭제", "t");
+      if(!action) return;
+
+      if(action.toLowerCase()==='t'){
+        const res = await fetch('/prof/slot/' + slotId + '/toggle', {method:'POST'});
+        const data = await res.json().catch(()=>({}));
+        if(!res.ok){ alert(data.detail || '오류'); return; }
+        calendar.refetchEvents(); await refreshTable();
+        return;
+      }
+      if(action.toLowerCase()==='d'){
+        if(!confirm('이 슬롯을 삭제할까? (예약도 함께 삭제됨)')) return;
+        const res = await fetch('/prof/slot/' + slotId + '/delete', {method:'POST'});
+        const data = await res.json().catch(()=>({}));
+        if(!res.ok){ alert(data.detail || '오류'); return; }
+        calendar.refetchEvents(); await refreshTable();
+        return;
+      }
+      if(action.toLowerCase()==='e'){
+        const st = prompt("시작시간 (YYYY-MM-DD HH:MM)", info.event.startStr.replace('T',' ').slice(0,16));
+        if(!st) return;
+        const en = prompt("종료시간 (YYYY-MM-DD HH:MM)", info.event.endStr.replace('T',' ').slice(0,16));
+        if(!en) return;
+        const fd = new FormData(); fd.append('starts_at', st); fd.append('ends_at', en);
+        const res = await fetch('/prof/slot/' + slotId + '/update_time', {method:'POST', body: fd});
+        const data = await res.json().catch(()=>({}));
+        if(!res.ok){ alert(data.detail || '오류'); return; }
+        calendar.refetchEvents(); await refreshTable();
+        return;
+      }
+    }
+  });
+
+  async function refreshTable(){
+    const res = await fetch('/api/prof/round/{{ rnd.id }}/slots_table', {credentials:'same-origin'});
+    const rows = await res.json();
+    const tbl = document.getElementById('slotsTable');
+    tbl.querySelectorAll('tr.slotrow').forEach(r=>r.remove());
+
+    for(const r of rows){
+      const tr = document.createElement('tr');
+      tr.className='slotrow';
+      tr.innerHTML =
+        `<td>${r.date}</td><td>${r.time}</td>`+
+        `<td><button data-toggle='${r.slotId}'>${r.open ? 'OPEN':'CLOSED'}</button></td>`+
+        `<td>${r.count}/${r.capacity}</td><td class='names'>${r.names||''}</td>`+
+        `<td><button data-edit='${r.slotId}'>수정</button></td>`+
+        `<td><button data-del='${r.slotId}'>삭제</button></td>`;
+      tbl.appendChild(tr);
+    }
+
+    tbl.querySelectorAll('button[data-toggle]').forEach(btn=>{
+      btn.onclick = async ()=>{
+        const id = btn.getAttribute('data-toggle');
+        const r = await fetch('/prof/slot/'+id+'/toggle', {method:'POST'});
+        const d = await r.json().catch(()=>({}));
+        if(!r.ok){ alert(d.detail||d.msg||('오류('+r.status+')')); return; }
+        calendar.refetchEvents(); await refreshTable();
+      };
+    });
+
+    tbl.querySelectorAll('button[data-del]').forEach(btn=>{
+      btn.onclick = async ()=>{
+        const id = btn.getAttribute('data-del');
+        if(!confirm('이 슬롯을 삭제할까? (예약도 함께 삭제됨)')) return;
+        const r = await fetch('/prof/slot/'+id+'/delete', {method:'POST'});
+        const d = await r.json().catch(()=>({}));
+        if(!r.ok){ alert(d.detail||d.msg||('오류('+r.status+')')); return; }
+        calendar.refetchEvents(); await refreshTable();
+      };
+    });
+
+    tbl.querySelectorAll('button[data-edit]').forEach(btn=>{
+      btn.onclick = async ()=>{
+        const id = btn.getAttribute('data-edit');
+        const st = prompt('시작시간 (YYYY-MM-DD HH:MM)', '');
+        if(!st) return;
+        const en = prompt('종료시간 (YYYY-MM-DD HH:MM)', '');
+        if(!en) return;
+        const fd=new FormData(); fd.append('starts_at', st); fd.append('ends_at', en);
+        const r = await fetch('/prof/slot/'+id+'/update_time', {method:'POST', body: fd});
+        const d = await r.json().catch(()=>({}));
+        if(!r.ok){ alert(d.detail||d.msg||('오류('+r.status+')')); return; }
+        calendar.refetchEvents(); await refreshTable();
+      };
+    });
+  }
+
+  calendar.render();
+  await refreshTable();
+});
+</script>
+
+{% endblock %}

@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>멘토링 상담 예약</h1>
+<p class="note">학생은 교수자가 안내한 웹주소로 접속 후 로그인/회원가입하여 예약함.</p>
+
+{% if user %}
+  <p>로그인됨: <b>{{ user.display_name }}</b> ({{ user.role }})</p>
+  <p><a class="btn" href="/dashboard">대시보드</a> <a class="btn" href="/logout">로그아웃</a></p>
+{% else %}
+  <p><a class="btn" href="/login">로그인</a> <a class="btn" href="/register">학생 회원가입</a></p>
+  <p class="note">보안을 위해 교수 계정/비밀번호는 화면에 표시하지 않음.</p>
+{% endif %}
+{% endblock %}

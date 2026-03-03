@@ -1,0 +1,220 @@
+{% extends "base.html" %}
+{% block head %}
+<link href="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.15/index.global.min.css" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.15/index.global.min.js"></script>
+{% endblock %}
+
+{% block body %}
+<h1>{{ rnd.name }} 예약(월간 달력)</h1>
+<p><a href="/student">학생 홈</a> | <a href="/logout">로그아웃</a></p>
+
+<div class="card">
+  <h2>예약 규칙</h2>
+  <ul>
+    <li>당일(00:00 이후) 예약/취소 불가</li>
+    <li>1:1(정원=1)은 예약자 이름 비공개</li>
+    <li>그룹상담(정원&gt;1)은 예약자 이름 공개</li>
+    <li>달력에서 슬롯 클릭 → 예약(가능한 경우)</li>
+  </ul>
+</div>
+
+<div class="card">
+  <h2>내 예약(표)</h2>
+  <p class="note">취소는 당일 전까지만 가능. 변경 기능은 제공하지 않음(취소 후 다시 예약).</p>
+  <div class="tablewrap">
+  <table id="myBookingsTable">
+    <tr><th>시간</th><th>취소</th></tr>
+  </table>
+  </div>
+</div>
+
+<div class="card">
+  <h2>월간 달력</h2>
+  <div id="calendar"></div>
+  <p class="note">슬롯 클릭 시 상세(정원/예약자 표시 규칙) 확인 가능함.</p>
+</div>
+
+
+<script>
+  // 학생용 라운드 달력 페이지
+  // v5_1_2 백엔드 엔드포인트에 맞춰 예약/취소 동작 수정
+  // - 예약: POST /api/student/book/{slotId}
+  // - 취소: POST /api/student/cancel/{bookingId}
+  // - 변경: 학생 UI에서는 제공하지 않음(취소 후 재예약)
+
+  const roundId = {{ rnd.id }};
+  let calendar = null;
+
+  async function apiCall(url, options = {}) {
+    const res = await fetch(url, Object.assign({ credentials: 'same-origin' }, options));
+    let payload = null;
+    const ct = (res.headers.get('content-type') || '').toLowerCase();
+
+    if (ct.includes('application/json')) {
+      try { payload = await res.json(); } catch { payload = null; }
+    }
+    if (payload === null) {
+      try { payload = await res.text(); } catch { payload = null; }
+    }
+
+    if (!res.ok) {
+      let msg = '오류';
+      if (payload && typeof payload === 'object' && payload.detail) msg = payload.detail;
+      else if (typeof payload === 'string' && payload.trim()) msg = payload;
+      throw new Error(msg);
+    }
+    return payload;
+  }
+
+  async function refreshMyTable() {
+    const tbl = document.getElementById('myBookingsTable');
+    // 기존 row 제거
+    tbl.querySelectorAll('tr.row').forEach(r => r.remove());
+
+    let myBookings = [];
+    try {
+      myBookings = await apiCall(`/api/student/round/${roundId}/my_bookings`, { method: 'GET' });
+    } catch (e) {
+      const tr = document.createElement('tr');
+      tr.className = 'row';
+      tr.innerHTML = `<td colspan="3" style="color:#b91c1c;">내 예약 조회 실패: ${e.message}</td>`;
+      tbl.appendChild(tr);
+      return;
+    }
+
+    if (!myBookings || myBookings.length === 0) {
+      const tr = document.createElement('tr');
+      tr.className = 'row';
+      tr.innerHTML = `<td colspan="2" style="color:#6b7280;">예약 내역 없음</td>`;
+      tbl.appendChild(tr);
+      return;
+    }
+
+    for (const b of myBookings) {
+      const tr = document.createElement('tr');
+      tr.className = 'row';
+      tr.innerHTML =
+        `<td>${b.date} ${b.time}</td>` +
+        `<td><button class="btn btn-sm btn-outline-danger" data-cancel="${b.bookingId}">취소</button></td>`;
+      tbl.appendChild(tr);
+    }
+
+    // 취소
+    tbl.querySelectorAll('button[data-cancel]').forEach(btn => {
+      btn.onclick = async () => {
+        const id = btn.getAttribute('data-cancel');
+        if (!confirm('이 예약을 취소할까?')) return;
+        try {
+          await apiCall(`/api/student/cancel/${id}`, { method: 'POST' });
+          alert('취소 완료');
+          calendar.refetchEvents();
+          await refreshMyTable();
+        } catch (e) {
+          alert(`취소 실패: ${e.message}`);
+        }
+      };
+    });
+
+  }
+
+  document.addEventListener('DOMContentLoaded', async () => {
+    const calendarEl = document.getElementById('calendar');
+
+    if (!window.FullCalendar) {
+      alert('달력 라이브러리(FullCalendar) 로딩 실패. 인터넷 연결 또는 보안 프로그램(CDN 차단) 확인 필요함.');
+      return;
+    }
+
+    calendar = new FullCalendar.Calendar(calendarEl, {
+      initialView: 'dayGridMonth',
+      /* week/day(timeGrid)에서 렌더링 멈춤 방지: 고정 높이 + row 확장 비활성 */
+      height: 760,
+      expandRows: false,
+      dayMaxEventRows: 4,
+      headerToolbar: {
+        left: 'prev,next today',
+        center: 'title',
+        right: 'dayGridMonth,timeGridWeek,timeGridDay'
+      },
+      eventDisplay: 'block',
+      eventTimeFormat: { hour: '2-digit', minute: '2-digit', hour12: false },
+      events: `/api/student/round/${roundId}/events`,
+      eventDidMount: function(info){
+        // 색상 규칙(학생 화면)
+        // - 내 예약: 주황
+        // - 닫힘(CLOSED): 연회색
+        // - 정원 마감(예약 마감): 진회색
+        // - 일부 예약됨(예: 1/2): 보라
+        // - 아직 예약 없음(0/x): 기본 파랑(FullCalendar 기본)
+        const p = info.event.extendedProps || {};
+        const el = info.el;
+        if (p.my) {
+          el.style.backgroundColor = '#f59e0b';
+          el.style.borderColor = '#b45309';
+          el.style.color = '#111827';
+        } else if (!p.isOpen) {
+          el.style.backgroundColor = '#9ca3af';
+          el.style.borderColor = '#9ca3af';
+        } else {
+          const count = Number(p.count || 0);
+          const cap = Number(p.capacity || 0);
+          if (cap > 0 && count >= cap) {
+            el.style.backgroundColor = '#6b7280';
+            el.style.borderColor = '#6b7280';
+          } else if (cap > 0 && count > 0) {
+            el.style.backgroundColor = '#8b5cf6';
+            el.style.borderColor = '#8b5cf6';
+          }
+        }
+        if (info.view.type === 'dayGridMonth') {
+          info.el.style.whiteSpace = 'normal';
+        } else {
+          info.el.style.whiteSpace = 'nowrap';
+        }
+      },
+      eventClick: async function(info) {
+        try {
+          const p = info.event.extendedProps || {};
+          const slotId = p.slotId;
+          if (!slotId) return;
+
+          // 내 예약 클릭
+          if (p.my) {
+            alert('내 예약임. 취소는 위 표에서 가능함. (변경은 취소 후 재예약)');
+            return;
+          }
+
+          // 예약 가능 여부
+          if (!p.isOpen) { alert('CLOSED 슬롯임.'); return; }
+          if (p.count >= p.capacity) { alert('정원 마감임.'); return; }
+
+          let detail = `시간: ${info.event.start.toLocaleString()}
+`;
+          detail += `예약 현황: ${p.count}/${p.capacity}
+`;
+          if (p.names && p.capacity > 1) detail += `예약자: ${p.names}
+`;
+          else if (p.count > 0 && p.capacity === 1) detail += `예약자: (1:1이라 비공개)
+`;
+
+          // 일반 예약
+          if (!confirm(detail + "\n이 슬롯을 예약할까?")) return;
+          await apiCall(`/api/student/book/${slotId}`, { method: 'POST' });
+          alert('예약 완료');
+          calendar.refetchEvents();
+          await refreshMyTable();
+
+        } catch (e) {
+          console.error(e);
+          alert(e.message || '오류');
+        }
+      }
+    });
+
+    calendar.render();
+    await refreshMyTable();
+  });
+</script>
+
+
+{% endblock %}

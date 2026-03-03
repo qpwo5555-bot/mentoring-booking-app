@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>학생 회원가입</h1>
+<p class="note">외부 가입 방지를 위해 초대코드가 필요함.</p>
+{% if error %}<p class="error">{{ error }}</p>{% endif %}
+<form method="post" action="/register">
+  <label>아이디(학번/이메일 등)</label>
+  <input name="username" required>
+  <label>비밀번호</label>
+  <input name="password" type="password" required>
+  <label>이름(표시명)</label>
+  <input name="display_name" required>
+  <label>초대코드</label>
+  <input name="invite_code" required placeholder="{{ invite_code_hint }}">
+  <button type="submit">가입</button>
+</form>
+<p><a href="/">홈</a></p>
+{% endblock %}

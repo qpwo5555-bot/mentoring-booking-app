@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block body %}
+<h1>학생 예약</h1>
+<p>로그인: <b>{{ user.display_name }}</b> | <a href="/logout">로그아웃</a></p>
+
+<div class="card">
+  <h2>차수 선택</h2>
+  <ul>
+    {% for r in rounds %}
+      <li>
+        <a href="/student/round/{{ r.id }}"><b>{{ r.name }}</b></a>
+        (상담시간 {{ r.duration_min }}분 / 정원 {{ r.capacity }}명 / 학생당 최대 {{ r.max_per_student }}회)
+      </li>
+    {% endfor %}
+  </ul>
+</div>
+
+<div class="card">
+  <h2>내 예약</h2>
+  <p class="note">규칙: 당일에는 예약/변경/취소 불가.</p>
+  <table>
+    <tr><th>차수</th><th>시간</th><th>취소(내일 이후만)</th></tr>
+    {% for b, s, r in my_items %}
+      <tr>
+        <td>{{ r.name }}</td>
+        <td>{{ s.starts_at.strftime("%Y-%m-%d %H:%M") }} ~ {{ s.ends_at.strftime("%H:%M") }}</td>
+        <td>
+          <form method="post" action="/api/student/cancel/{{ b.id }}" onsubmit="return cancelBooking(event, this);">
+            <button type="submit">취소</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+  </table>
+</div>
+
+<script>
+async function cancelBooking(ev, form){
+  ev.preventDefault();
+  const res = await fetch(form.action, {method:'POST'});
+  const t = await res.json().catch(()=>({msg:'오류'}));
+  if(!res.ok){ alert(t.detail || t.msg || '오류'); return false; }
+  alert(t.msg || '취소 완료');
+  window.location.reload();
+  return false;
+}
+</script>
+{% endblock %}
