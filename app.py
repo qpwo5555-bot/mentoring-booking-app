@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, date, time, timedelta, timezone
 from typing import Optional, Dict, List, Tuple, Any
 import secrets
+import re
 
 from fastapi import FastAPI, Request, Form, Depends, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, PlainTextResponse
@@ -15,6 +16,42 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 # ---- Timezone (Windows에서도 안정적으로 동작하도록 KST 고정) ----
 APP_TZ = timezone(timedelta(hours=9))  # KST +09:00
+
+
+
+def parse_weekdays_input(s: str) -> set[int]:
+    """Parse weekday input (Mon=0 .. Sun=6).
+
+    허용 예시:
+    - '0,2,4' (월/수/금)
+    - '0 2 4', '0/2/4', '0.2.4'
+    - '월/수/금', '월,수,금'
+
+    Returns: set of ints in [0..6]
+    """
+    if s is None:
+        raise ValueError('empty')
+    raw = str(s).strip()
+    if not raw:
+        raise ValueError('empty')
+
+    kor_map = {'월': 0, '화': 1, '수': 2, '목': 3, '금': 4, '토': 5, '일': 6}
+    nums: list[int] = []
+
+    for ch in raw:
+        if ch in kor_map:
+            nums.append(kor_map[ch])
+
+    # digits 0-6 anywhere (handles commas, dots, slashes etc.)
+    for m in re.findall(r"[0-6]", raw):
+        nums.append(int(m))
+
+    wds = set(nums)
+    if not wds:
+        raise ValueError('invalid')
+    if any(x < 0 or x > 6 for x in wds):
+        raise ValueError('invalid')
+    return wds
 
 DB_URL = "sqlite:///./mentoring.db"
 SECRET = "CHANGE_ME_TO_A_LONG_RANDOM_SECRET"  # 배포 시 반드시 변경
@@ -487,7 +524,10 @@ def prof_generate_slots(
 
     sd = date.fromisoformat(start_date)
     ed = date.fromisoformat(end_date)
-    wds = set(int(x.strip()) for x in weekdays.split(",") if x.strip() != "")
+    try:
+        wds = parse_weekdays_input(weekdays)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="요일 입력이 올바르지 않음. 예: 0,2,4 (월/수/금) 또는 월,수,금")
     st = time.fromisoformat(start_time)
     et = time.fromisoformat(end_time)
 
