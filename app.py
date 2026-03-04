@@ -17,42 +17,6 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 # ---- Timezone (Windows에서도 안정적으로 동작하도록 KST 고정) ----
 APP_TZ = timezone(timedelta(hours=9))  # KST +09:00
 
-
-
-def parse_weekdays_input(s: str) -> set[int]:
-    """Parse weekday input (Mon=0 .. Sun=6).
-
-    허용 예시:
-    - '0,2,4' (월/수/금)
-    - '0 2 4', '0/2/4', '0.2.4'
-    - '월/수/금', '월,수,금'
-
-    Returns: set of ints in [0..6]
-    """
-    if s is None:
-        raise ValueError('empty')
-    raw = str(s).strip()
-    if not raw:
-        raise ValueError('empty')
-
-    kor_map = {'월': 0, '화': 1, '수': 2, '목': 3, '금': 4, '토': 5, '일': 6}
-    nums: list[int] = []
-
-    for ch in raw:
-        if ch in kor_map:
-            nums.append(kor_map[ch])
-
-    # digits 0-6 anywhere (handles commas, dots, slashes etc.)
-    for m in re.findall(r"[0-6]", raw):
-        nums.append(int(m))
-
-    wds = set(nums)
-    if not wds:
-        raise ValueError('invalid')
-    if any(x < 0 or x > 6 for x in wds):
-        raise ValueError('invalid')
-    return wds
-
 DB_URL = "sqlite:///./mentoring.db"
 SECRET = "CHANGE_ME_TO_A_LONG_RANDOM_SECRET"  # 배포 시 반드시 변경
 COOKIE_NAME = "mentoring_session"
@@ -241,7 +205,7 @@ def cutoff_ok(starts_at: datetime) -> bool:
     기준: 슬롯 시작일의 '00:00'(KST) 이전까지만 허용.
     """
     now = now_kst()
-    slot_date = starts_at.astimezone(APP_TZ).date()
+    slot_date = as_kst(starts_at).date()
     slot_day_start = datetime.combine(slot_date, time(0, 0), tzinfo=APP_TZ)
     return now < slot_day_start
 
@@ -276,9 +240,21 @@ def count_my_round_bookings(db: Session, user_id: int, round_id: int) -> int:
     return sum(1 for b in my if b.slot_id in slot_set)
 
 
+def as_kst(dt: datetime) -> datetime:
+    """SQLite 저장/로드 과정에서 tzinfo가 누락되는 경우가 있어 KST로 보정함.
+
+    - tzinfo 없음: 이미 한국시간으로 입력된 값이라고 가정하고 KST를 부여함
+    - tzinfo 있음: KST로 변환해 반환
+    """
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=APP_TZ)
+    return dt.astimezone(APP_TZ)
+
+
 def iso_dt(dt: datetime) -> str:
     # FullCalendar가 이해하는 ISO8601 형식(타임존 포함)
-    return dt.astimezone(APP_TZ).isoformat()
+    # tzinfo가 없는 datetime을 서버 로컬(UTC)로 오해하면 요일/날짜가 밀리는 문제가 생김
+    return as_kst(dt).isoformat()
 
 
 # -------------------------
@@ -432,6 +408,27 @@ def prof_reset_student_password(student_key: str, db: Session = Depends(get_db),
     return {"ok": True, "student_id": stu.id, "username": stu.username, "temp_password": temp_pw}
 
 
+@app.post("/api/prof/students/{student_key}/delete")
+def prof_delete_student(student_key: str, db: Session = Depends(get_db), prof: User = Depends(require_prof)):
+    """교수자 전용: 학생 계정 삭제(해당 학생 예약도 함께 삭제)."""
+    stu: Optional[User] = None
+    if student_key.isdigit():
+        stu = db.get(User, int(student_key))
+        if stu and stu.role != "student":
+            stu = None
+    if not stu:
+        stu = db.exec(select(User).where(User.username == student_key, User.role == "student")).first()
+
+    if not stu:
+        raise HTTPException(404, "학생 없음")
+
+    # 학생이 예약한 booking 먼저 삭제
+    db.exec(delete(Booking).where(Booking.user_id == stu.id))
+    db.delete(stu)
+    db.commit()
+    return {"ok": True, "deleted": True, "username": stu.username}
+
+
 @app.post("/prof/term")
 def prof_create_term(name: str = Form(...), db: Session = Depends(get_db), prof: User = Depends(require_prof)):
     for t in db.exec(select(Term)).all():
@@ -524,10 +521,14 @@ def prof_generate_slots(
 
     sd = date.fromisoformat(start_date)
     ed = date.fromisoformat(end_date)
-    try:
-        wds = parse_weekdays_input(weekdays)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="요일 입력이 올바르지 않음. 예: 0,2,4 (월/수/금) 또는 월,수,금")
+    # 요일 파싱
+    # 입력 예: "0,2,4" / "0.2.4" / "0 2 4" / "0/2/4"
+    # 규칙: 월=0, 화=1, 수=2, 목=3, 금=4, 토=5, 일=6 (Python date.weekday 기준)
+    tokens = re.findall(r"\d+", (weekdays or ""))
+    wds = {int(t) for t in tokens if t.isdigit()}
+    wds = {x for x in wds if 0 <= x <= 6}
+    if not wds:
+        raise HTTPException(status_code=400, detail="요일 입력 오류: 0~6 숫자를 입력해 주세요. 예) 0,2,4")
     st = time.fromisoformat(start_time)
     et = time.fromisoformat(end_time)
 
@@ -580,7 +581,9 @@ def prof_events(round_id: int, db: Session = Depends(get_db), prof: User = Depen
     for s in slots:
         us = by_slot.get(s.id, [])
         cnt = len(us)
-        title = f"{s.starts_at.strftime('%H:%M')}-{s.ends_at.strftime('%H:%M')} | "
+        ss = as_kst(s.starts_at)
+        ee = as_kst(s.ends_at)
+        title = f"{ss.strftime('%H:%M')}-{ee.strftime('%H:%M')} | "
         title += ("CLOSED" if not s.is_open else f"{cnt}/{rnd.capacity}")
         if cnt > 0:
             title += " | " + ", ".join([u.display_name for u in us if u])
@@ -605,7 +608,8 @@ def prof_events(round_id: int, db: Session = Depends(get_db), prof: User = Depen
             "title": title,
             "start": iso_dt(s.starts_at),
             "end": iso_dt(s.ends_at),
-            **({"backgroundColor": bg, "borderColor": border, "textColor": text} if bg else {}),
+            # month view에서 eventDisplay가 'list-item'인 경우 backgroundColor가 잘 안 먹어서 color도 같이 내려줌
+            **({"backgroundColor": bg, "borderColor": border, "textColor": text, "color": bg} if bg else {}),
             "extendedProps": {
                 "slotId": s.id,
                 "isOpen": s.is_open,
