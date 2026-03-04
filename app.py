@@ -4,6 +4,7 @@ from datetime import datetime, date, time, timedelta, timezone
 from typing import Optional, Dict, List, Tuple, Any
 import secrets
 import re
+import os
 
 from fastapi import FastAPI, Request, Form, Depends, HTTPException
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, PlainTextResponse
@@ -17,7 +18,7 @@ from jinja2 import Environment, FileSystemLoader, select_autoescape
 # ---- Timezone (Windows에서도 안정적으로 동작하도록 KST 고정) ----
 APP_TZ = timezone(timedelta(hours=9))  # KST +09:00
 
-DB_URL = os.getenv("DB_URL", "sqlite:///./mentoring.db")  # 기본은 로컬
+DB_URL = os.getenv("DB_URL", "sqlite:///mentoring.db")
 SECRET = "CHANGE_ME_TO_A_LONG_RANDOM_SECRET"  # 배포 시 반드시 변경
 COOKIE_NAME = "mentoring_session"
 
